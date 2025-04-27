@@ -1,19 +1,34 @@
-# Countdown
+# 📱 Countdown
 
-A new Flutter project created with FlutLab - https://flutlab.io
+Um novo projeto Flutter criado com [FlutLab](https://flutlab.io).
+Um contador com contagem regressiva de anos, meses, dias, horas, minutos e segundos.
+Consumindo uma api para identificar feriados nacionais.
 
-## Getting Started
+---
 
-A few resources to get you started if this is your first Flutter project:
+## 📸 Demonstração
 
-- https://flutter.dev/docs/get-started/codelab
-- https://flutter.dev/docs/cookbook
+<img src="/public/readme1.png">
+<img src="/public/readme2.png">
+<img src="/public/readme3.png">
+<img src="/public/readme4.png">
+<img src="/public/readme5.png">
+<img src="/public/readme6.png">
+<img src="/public/readme7.png">
 
-For help getting started with Flutter, view our
-https://flutter.dev/docs, which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
 
-## Getting Started: FlutLab - Flutter Online IDE
 
-- How to use FlutLab? Please, view our https://flutlab.io/docs
-- Join the discussion and conversation on https://flutlab.io/residents
+## 🚀 Tecnologias Utilizadas
+
+- [Flutter](https://flutter.dev/) (SDK de desenvolvimento mobile)
+- [Dart](https://dart.dev/) (linguagem de programação)
+- [FlutLab IDE](https://flutlab.io) (ambiente online de desenvolvimento)
+
+---
+
+## 🛠️ Como rodar o projeto
+
+Siga os passos abaixo para configurar o ambiente e rodar o projeto localmente:
+
+### 1. Leia o QR code
+<img src="/public/readme8.png">

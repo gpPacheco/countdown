@@ -1,7 +1,6 @@
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(const MyApp());
@@ -13,133 +12,792 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Contador via API',
+      title: 'Countdown Timer',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primarySwatch: Colors.blue,
+        brightness: Brightness.dark,
+        primaryColor: Colors.white,
+        scaffoldBackgroundColor: Colors.black,
+        useMaterial3: true,
       ),
-      home: const CounterScreen(),
+      home: const CountdownListScreen(),
     );
   }
 }
 
-class CounterScreen extends StatefulWidget {
-  const CounterScreen({super.key});
+class CountdownData {
+  final String id;
+  final String name;
+  DateTime targetDate;
+  bool isPaused;
+  DateTime? pausedAt;
+  Duration? remainingDuration;
 
-  @override
-  State<CounterScreen> createState() => _CounterScreenState();
+  CountdownData({
+    required this.name,
+    required this.targetDate,
+    this.isPaused = false,
+    this.pausedAt,
+    this.remainingDuration,
+  }) : id = DateTime.now().millisecondsSinceEpoch.toString();
+
+  void togglePause() {
+    if (isPaused) {
+      // Resuming - adjust target date based on how long it was paused
+      if (pausedAt != null) {
+        final pauseDuration = DateTime.now().difference(pausedAt!);
+        targetDate = targetDate.add(pauseDuration);
+      }
+      pausedAt = null;
+    } else {
+      // Pausing - store the current time
+      pausedAt = DateTime.now();
+      remainingDuration = targetDate.difference(pausedAt!);
+    }
+    isPaused = !isPaused;
+  }
+
+  Duration getRemainingDuration() {
+    if (isPaused && remainingDuration != null) {
+      return remainingDuration!;
+    }
+    return targetDate.difference(DateTime.now());
+  }
 }
 
-class _CounterScreenState extends State<CounterScreen> {
-  int _seconds = 0;
-  DateTime? _startTime;
-  bool _isLoading = true;
-  String _errorMessage = '';
-  Timer? _timer;
+class CountdownListScreen extends StatefulWidget {
+  const CountdownListScreen({super.key});
+
+  @override
+  State<CountdownListScreen> createState() => _CountdownListScreenState();
+}
+
+class _CountdownListScreenState extends State<CountdownListScreen> {
+  final List<CountdownData> _countdowns = [];
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
-    _fetchTimeAndStartCounter();
+    // Start a timer to refresh the list view every second
+    _refreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _refreshTimer?.cancel();
     super.dispose();
-  }
-
-  Future<void> _fetchTimeAndStartCounter() async {
-    try {
-      final response = await http.get(
-          Uri.parse('http://worldtimeapi.org/api/timezone/America/Sao_Paulo'));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final currentTime = DateTime.parse(data['datetime']);
-
-        setState(() {
-          _startTime = currentTime;
-          _isLoading = false;
-        });
-
-        _startCounter();
-      } else {
-        throw Exception('Falha ao carregar o tempo');
-      }
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Erro: $e';
-      });
-    }
-  }
-
-  void _startCounter() {
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_startTime != null) {
-        final now = DateTime.now();
-        final difference = now.difference(_startTime!);
-        setState(() {
-          _seconds = difference.inSeconds;
-        });
-      }
-    });
-  }
-
-  String _formatTime(int totalSeconds) {
-    final hours = (totalSeconds ~/ 3600).toString().padLeft(2, '0');
-    final minutes = ((totalSeconds % 3600) ~/ 60).toString().padLeft(2, '0');
-    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
-    return '$hours:$minutes:$seconds';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Contador via API'),
+        title: const Text('COUNTDOWN TIMERS'),
         centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
       ),
-      body: Center(
-        child: _isLoading
-            ? const CircularProgressIndicator()
-            : _errorMessage.isNotEmpty
-                ? Text(
-                    _errorMessage,
-                    style: const TextStyle(color: Colors.red, fontSize: 18),
-                  )
-                : Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'Tempo decorrido desde:',
-                        style: TextStyle(fontSize: 18),
-                      ),
-                      Text(
-                        _startTime?.toString() ?? '',
-                        style: const TextStyle(
-                            fontSize: 16, fontStyle: FontStyle.italic),
-                      ),
-                      const SizedBox(height: 40),
-                      Text(
-                        _formatTime(_seconds),
-                        style: const TextStyle(
-                            fontSize: 48, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 20),
-                      const Text(
-                        'Horário obtido da World Time API',
-                        style: TextStyle(fontSize: 14, color: Colors.grey),
-                      ),
-                    ],
-                  ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black,
+              Colors.blueGrey.shade900,
+            ],
+          ),
+        ),
+        child: _countdowns.isEmpty
+            ? const Center(
+                child: Text(
+                  'No countdowns added.\nTap + to add a new countdown.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16),
+                ),
+              )
+            : ListView.builder(
+                itemCount: _countdowns.length,
+                itemBuilder: (context, index) {
+                  final countdown = _countdowns[index];
+                  return _buildCountdownCard(countdown, index);
+                },
+              ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _fetchTimeAndStartCounter,
-        tooltip: 'Recarregar',
-        child: const Icon(Icons.refresh),
+        onPressed: () => _navigateToCreateCountdown(context),
+        child: const Icon(Icons.add),
       ),
+    );
+  }
+
+  Widget _buildCountdownCard(CountdownData countdown, int index) {
+    final duration = countdown.getRemainingDuration();
+    final isNegative = duration.isNegative;
+
+    String timeText;
+    if (isNegative) {
+      final positiveDuration = duration.abs();
+      final days = positiveDuration.inDays;
+      final hours = positiveDuration.inHours.remainder(24);
+      final minutes = positiveDuration.inMinutes.remainder(60);
+
+      timeText = "Exceeded by: ${days}d ${hours}h ${minutes}m";
+    } else {
+      final days = duration.inDays;
+      final hours = duration.inHours.remainder(24);
+      final minutes = duration.inMinutes.remainder(60);
+
+      timeText = "Remaining: ${days}d ${hours}h ${minutes}m";
+    }
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: Colors.white.withOpacity(0.1),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        title: Text(
+          countdown.name,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        subtitle: Text(
+          timeText,
+          style: TextStyle(
+            color: isNegative ? Colors.red.shade300 : Colors.white70,
+          ),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildAnimatedPauseButton(countdown),
+            IconButton(
+              icon: const Icon(
+                Icons.delete_outline,
+                color: Colors.white,
+              ),
+              onPressed: () {
+                setState(() {
+                  _countdowns.removeAt(index);
+                });
+              },
+            ),
+          ],
+        ),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => CountdownScreen(
+                countdown: countdown,
+                onTogglePause: () {
+                  setState(() {
+                    countdown.togglePause();
+                  });
+                },
+              ),
+            ),
+          ).then((_) => setState(() {}));
+        },
+      ),
+    );
+  }
+
+  Widget _buildAnimatedPauseButton(CountdownData countdown) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 300),
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        return ScaleTransition(scale: animation, child: child);
+      },
+      child: IconButton(
+        key: ValueKey<bool>(countdown.isPaused),
+        icon: Icon(
+          countdown.isPaused ? Icons.play_arrow : Icons.pause,
+          color: Colors.white,
+        ),
+        onPressed: () {
+          setState(() {
+            countdown.togglePause();
+          });
+        },
+      ),
+    );
+  }
+
+  Future<void> _navigateToCreateCountdown(BuildContext context) async {
+    final result = await Navigator.push<CountdownData?>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const CountdownSetupScreen(),
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _countdowns.add(result);
+      });
+    }
+  }
+}
+
+class CountdownSetupScreen extends StatefulWidget {
+  const CountdownSetupScreen({super.key});
+
+  @override
+  State<CountdownSetupScreen> createState() => _CountdownSetupScreenState();
+}
+
+class _CountdownSetupScreenState extends State<CountdownSetupScreen> {
+  final TextEditingController _nameController = TextEditingController();
+  int _years = 0;
+  int _months = 0;
+  int _days = 0;
+  int _hours = 0;
+  int _minutes = 0;
+  int _seconds = 0;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _createCountdown() {
+    if (_nameController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a name for the countdown'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (_years == 0 &&
+        _months == 0 &&
+        _days == 0 &&
+        _hours == 0 &&
+        _minutes == 0 &&
+        _seconds == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please set a time for the countdown'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    final targetDate = now.add(Duration(
+      days: _years * 365 + _months * 30 + _days,
+      hours: _hours,
+      minutes: _minutes,
+      seconds: _seconds,
+    ));
+
+    final countdownData = CountdownData(
+      name: _nameController.text,
+      targetDate: targetDate,
+    );
+
+    Navigator.pop(context, countdownData);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Create Countdown'),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black,
+              Colors.blueGrey.shade900,
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Countdown Name:',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _nameController,
+                    decoration: InputDecoration(
+                      hintText: 'Ex: Vacation, Birthday, etc.',
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.1),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 30),
+                  const Text(
+                    'Set Time:',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  _buildTimeInputs(),
+                  const SizedBox(height: 40),
+                  Center(
+                    child: ElevatedButton(
+                      onPressed: _createCountdown,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white.withOpacity(0.2),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 40,
+                          vertical: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                      child: const Text(
+                        'CREATE COUNTDOWN',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimeInputs() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _buildTimeInputBox(
+                label: 'Years',
+                value: _years,
+                onChanged: (value) => setState(() => _years = value),
+                maxValue: null,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildTimeInputBox(
+                label: 'Months',
+                value: _months,
+                onChanged: (value) => setState(() => _months = value),
+                maxValue: 11,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _buildTimeInputBox(
+                label: 'Days',
+                value: _days,
+                onChanged: (value) => setState(() => _days = value),
+                maxValue: 30,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildTimeInputBox(
+                label: 'Hours',
+                value: _hours,
+                onChanged: (value) => setState(() => _hours = value),
+                maxValue: 23,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _buildTimeInputBox(
+                label: 'Minutes',
+                value: _minutes,
+                onChanged: (value) => setState(() => _minutes = value),
+                maxValue: 59,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildTimeInputBox(
+                label: 'Seconds',
+                value: _seconds,
+                onChanged: (value) => setState(() => _seconds = value),
+                maxValue: 59,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTimeInputBox({
+    required String label,
+    required int value,
+    required Function(int) onChanged,
+    int? maxValue,
+  }) {
+    final TextEditingController controller =
+        TextEditingController(text: value.toString());
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.remove_circle_outline),
+                onPressed: value > 0
+                    ? () {
+                        onChanged(value - 1);
+                      }
+                    : null,
+              ),
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(3),
+                  ],
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  onChanged: (text) {
+                    final newValue = int.tryParse(text) ?? 0;
+                    if (maxValue != null && newValue > maxValue) {
+                      controller.text = maxValue.toString();
+                      onChanged(maxValue);
+                    } else {
+                      onChanged(newValue);
+                    }
+                  },
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline),
+                onPressed: maxValue == null || value < maxValue
+                    ? () {
+                        onChanged(value + 1);
+                      }
+                    : null,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class CountdownScreen extends StatefulWidget {
+  final CountdownData countdown;
+  final VoidCallback onTogglePause;
+
+  const CountdownScreen({
+    super.key,
+    required this.countdown,
+    required this.onTogglePause,
+  });
+
+  @override
+  State<CountdownScreen> createState() => _CountdownScreenState();
+}
+
+class _CountdownScreenState extends State<CountdownScreen>
+    with SingleTickerProviderStateMixin {
+  late Timer _timer;
+  int _days = 0;
+  int _hours = 0;
+  int _minutes = 0;
+  int _seconds = 0;
+  bool _isNegative = false;
+
+  late AnimationController _animationController;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _calculateTimeRemaining();
+    _startTimer();
+
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.8).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeInOut,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) {
+        _calculateTimeRemaining();
+      }
+    });
+  }
+
+  void _calculateTimeRemaining() {
+    final duration = widget.countdown.getRemainingDuration();
+
+    setState(() {
+      if (duration.isNegative) {
+        _isNegative = true;
+        final positiveDuration = duration.abs();
+        _days = positiveDuration.inDays;
+        _hours = positiveDuration.inHours.remainder(24);
+        _minutes = positiveDuration.inMinutes.remainder(60);
+        _seconds = positiveDuration.inSeconds.remainder(60);
+      } else {
+        _isNegative = false;
+        _days = duration.inDays;
+        _hours = duration.inHours.remainder(24);
+        _minutes = duration.inMinutes.remainder(60);
+        _seconds = duration.inSeconds.remainder(60);
+      }
+    });
+  }
+
+  void _togglePause() {
+    _animationController.forward().then((_) {
+      widget.onTogglePause();
+      _animationController.reverse();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black,
+              Colors.blueGrey.shade900,
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                    Expanded(
+                      child: const Center(
+                        child: Text(
+                          'COUNTDOWN',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 2.0,
+                          ),
+                        ),
+                      ),
+                    ),
+                    _buildAnimatedPauseButton(),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          widget.countdown.name.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.5,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 50),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _buildTimeUnit(
+                                _days.toString().padLeft(2, '0'), 'DAY'),
+                            const SizedBox(width: 20),
+                            _buildTimeUnit(
+                                _hours.toString().padLeft(2, '0'), 'HRS'),
+                            const SizedBox(width: 20),
+                            _buildTimeUnit(
+                                _minutes.toString().padLeft(2, '0'), 'MIN'),
+                            const SizedBox(width: 20),
+                            _buildTimeUnit(
+                                _seconds.toString().padLeft(2, '0'), 'SEC'),
+                          ],
+                        ),
+                        const SizedBox(height: 40),
+                        if (_isNegative)
+                          Text(
+                            'TIME EXCEEDED',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: Colors.red.shade300,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        if (widget.countdown.isPaused)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 16.0),
+                            child: Text(
+                              'PAUSED',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.amber.shade300,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnimatedPauseButton() {
+    return GestureDetector(
+      onTap: _togglePause,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        transitionBuilder: (Widget child, Animation<double> animation) {
+          return ScaleTransition(scale: animation, child: child);
+        },
+        child: ScaleTransition(
+          scale: _scaleAnimation,
+          child: Container(
+            key: ValueKey<bool>(widget.countdown.isPaused),
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withOpacity(0.2),
+            ),
+            child: Icon(
+              widget.countdown.isPaused ? Icons.play_arrow : Icons.pause,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimeUnit(String value, String label) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 48,
+            fontWeight: FontWeight.bold,
+            color: _isNegative ? Colors.red.shade300 : Colors.white,
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w300,
+            color: Colors.white.withOpacity(0.7),
+          ),
+        ),
+      ],
     );
   }
 }

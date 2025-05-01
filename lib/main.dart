@@ -1,6 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:table_calendar/table_calendar.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const MyApp());
@@ -32,6 +37,7 @@ class CountdownData {
   bool isPaused;
   DateTime? pausedAt;
   Duration? remainingDuration;
+  DateTime lastUpdated;
 
   CountdownData({
     required this.name,
@@ -39,22 +45,24 @@ class CountdownData {
     this.isPaused = false,
     this.pausedAt,
     this.remainingDuration,
-  }) : id = DateTime.now().millisecondsSinceEpoch.toString();
+    String? id,
+    DateTime? lastUpdated,
+  })  : id = id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        lastUpdated = lastUpdated ?? DateTime.now();
 
   void togglePause() {
     if (isPaused) {
-      // Resuming - adjust target date based on how long it was paused
       if (pausedAt != null) {
         final pauseDuration = DateTime.now().difference(pausedAt!);
         targetDate = targetDate.add(pauseDuration);
       }
       pausedAt = null;
     } else {
-      // Pausing - store the current time
       pausedAt = DateTime.now();
       remainingDuration = targetDate.difference(pausedAt!);
     }
     isPaused = !isPaused;
+    lastUpdated = DateTime.now();
   }
 
   Duration getRemainingDuration() {
@@ -62,6 +70,44 @@ class CountdownData {
       return remainingDuration!;
     }
     return targetDate.difference(DateTime.now());
+  }
+
+  void updateAfterRestart() {
+    if (!isPaused) {
+      final now = DateTime.now();
+      final elapsedSinceLastUpdate = now.difference(lastUpdated);
+      lastUpdated = now;
+      targetDate = targetDate.subtract(elapsedSinceLastUpdate);
+    }
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'targetDate': targetDate.toIso8601String(),
+      'isPaused': isPaused,
+      'pausedAt': pausedAt?.toIso8601String(),
+      'remainingDuration': remainingDuration?.inSeconds,
+      'lastUpdated': lastUpdated.toIso8601String(),
+    };
+  }
+
+  factory CountdownData.fromJson(Map<String, dynamic> json) {
+    return CountdownData(
+      id: json['id'],
+      name: json['name'],
+      targetDate: DateTime.parse(json['targetDate']),
+      isPaused: json['isPaused'],
+      pausedAt:
+          json['pausedAt'] != null ? DateTime.parse(json['pausedAt']) : null,
+      remainingDuration: json['remainingDuration'] != null
+          ? Duration(seconds: json['remainingDuration'])
+          : null,
+      lastUpdated: json['lastUpdated'] != null
+          ? DateTime.parse(json['lastUpdated'])
+          : DateTime.now(),
+    );
   }
 }
 
@@ -72,23 +118,91 @@ class CountdownListScreen extends StatefulWidget {
   State<CountdownListScreen> createState() => _CountdownListScreenState();
 }
 
-class _CountdownListScreenState extends State<CountdownListScreen> {
-  final List<CountdownData> _countdowns = [];
+class _CountdownListScreenState extends State<CountdownListScreen>
+    with WidgetsBindingObserver {
+  List<CountdownData> _countdowns = [];
   Timer? _refreshTimer;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    // Start a timer to refresh the list view every second
+    WidgetsBinding.instance.addObserver(this);
+    _loadCountdowns();
     _refreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
+    });
+    Timer.periodic(const Duration(seconds: 30), (_) {
+      _saveCountdowns();
     });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
+    _saveCountdowns();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveCountdowns();
+    } else if (state == AppLifecycleState.resumed) {
+      _loadCountdowns();
+    }
+  }
+
+  Future<String> get _localPath async {
+    final directory = await getApplicationDocumentsDirectory();
+    return directory.path;
+  }
+
+  Future<File> get _localFile async {
+    final path = await _localPath;
+    return File('$path/countdowns.json');
+  }
+
+  Future<void> _loadCountdowns() async {
+    try {
+      final file = await _localFile;
+      if (await file.exists()) {
+        final contents = await file.readAsString();
+        final List<dynamic> jsonList = jsonDecode(contents);
+
+        setState(() {
+          _countdowns =
+              jsonList.map((json) => CountdownData.fromJson(json)).toList();
+          for (var countdown in _countdowns) {
+            countdown.updateAfterRestart();
+          }
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading countdowns: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _saveCountdowns() async {
+    try {
+      final file = await _localFile;
+      final jsonList =
+          _countdowns.map((countdown) => countdown.toJson()).toList();
+      await file.writeAsString(jsonEncode(jsonList));
+    } catch (e) {
+      debugPrint('Error saving countdowns: $e');
+    }
   }
 
   @override
@@ -111,25 +225,46 @@ class _CountdownListScreenState extends State<CountdownListScreen> {
             ],
           ),
         ),
-        child: _countdowns.isEmpty
-            ? const Center(
-                child: Text(
-                  'No countdowns added.\nTap + to add a new countdown.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 16),
-                ),
-              )
-            : ListView.builder(
-                itemCount: _countdowns.length,
-                itemBuilder: (context, index) {
-                  final countdown = _countdowns[index];
-                  return _buildCountdownCard(countdown, index);
-                },
-              ),
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _countdowns.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No countdowns added.\nTap + to add a new countdown.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 16),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: _countdowns.length,
+                    itemBuilder: (context, index) {
+                      final countdown = _countdowns[index];
+                      return _buildCountdownCard(countdown, index);
+                    },
+                  ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _navigateToCreateCountdown(context),
-        child: const Icon(Icons.add),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            heroTag: 'calendar',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const HolidayCalendarScreen(),
+                ),
+              );
+            },
+            child: const Icon(Icons.calendar_today),
+          ),
+          const SizedBox(height: 16),
+          FloatingActionButton(
+            heroTag: 'add',
+            onPressed: () => _navigateToCreateCountdown(context),
+            child: const Icon(Icons.add),
+          ),
+        ],
       ),
     );
   }
@@ -187,6 +322,7 @@ class _CountdownListScreenState extends State<CountdownListScreen> {
               onPressed: () {
                 setState(() {
                   _countdowns.removeAt(index);
+                  _saveCountdowns();
                 });
               },
             ),
@@ -201,11 +337,15 @@ class _CountdownListScreenState extends State<CountdownListScreen> {
                 onTogglePause: () {
                   setState(() {
                     countdown.togglePause();
+                    _saveCountdowns();
                   });
                 },
               ),
             ),
-          ).then((_) => setState(() {}));
+          ).then((_) {
+            setState(() {});
+            _saveCountdowns();
+          });
         },
       ),
     );
@@ -226,6 +366,7 @@ class _CountdownListScreenState extends State<CountdownListScreen> {
         onPressed: () {
           setState(() {
             countdown.togglePause();
+            _saveCountdowns();
           });
         },
       ),
@@ -243,6 +384,7 @@ class _CountdownListScreenState extends State<CountdownListScreen> {
     if (result != null) {
       setState(() {
         _countdowns.add(result);
+        _saveCountdowns();
       });
     }
   }
@@ -307,6 +449,7 @@ class _CountdownSetupScreenState extends State<CountdownSetupScreen> {
     final countdownData = CountdownData(
       name: _nameController.text,
       targetDate: targetDate,
+      lastUpdated: now,
     );
 
     Navigator.pop(context, countdownData);
@@ -798,6 +941,154 @@ class _CountdownScreenState extends State<CountdownScreen>
           ),
         ),
       ],
+    );
+  }
+}
+
+class Holiday {
+  final String name;
+  final String type;
+
+  Holiday({required this.name, required this.type});
+}
+
+class HolidayCalendarScreen extends StatefulWidget {
+  const HolidayCalendarScreen({super.key});
+
+  @override
+  _HolidayCalendarScreenState createState() => _HolidayCalendarScreenState();
+}
+
+class _HolidayCalendarScreenState extends State<HolidayCalendarScreen> {
+  CalendarFormat _calendarFormat = CalendarFormat.month;
+  DateTime _focusedDay = DateTime.now();
+  DateTime? _selectedDay;
+  Map<DateTime, List<Holiday>> _holidays = {};
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDay = _focusedDay;
+    _fetchHolidays(DateTime.now().year);
+  }
+
+  Future<void> _fetchHolidays(int year) async {
+    setState(() => _isLoading = true);
+
+    try {
+      final response = await http.get(Uri.parse(
+          'https://api.invertexto.com/v1/holidays/$year?token=holiday'));
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        final Map<DateTime, List<Holiday>> holidaysMap = {};
+
+        for (var holiday in data) {
+          final date = DateTime.parse(holiday['date']);
+          holidaysMap[date] = [
+            Holiday(name: holiday['name'], type: holiday['type'])
+          ];
+        }
+
+        setState(() {
+          _holidays = holidaysMap;
+          _isLoading = false;
+        });
+      } else {
+        throw Exception('Failed to load holidays');
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: ${e.toString()}')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Feriados Nacionais'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => _fetchHolidays(_focusedDay.year),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          TableCalendar<Holiday>(
+            firstDay: DateTime(DateTime.now().year - 1),
+            lastDay: DateTime(DateTime.now().year + 1),
+            focusedDay: _focusedDay,
+            calendarFormat: _calendarFormat,
+            selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+            onDaySelected: (selectedDay, focusedDay) {
+              setState(() {
+                _selectedDay = selectedDay;
+                _focusedDay = focusedDay;
+              });
+            },
+            onFormatChanged: (format) {
+              setState(() => _calendarFormat = format);
+            },
+            onPageChanged: (focusedDay) {
+              _focusedDay = focusedDay;
+              _fetchHolidays(focusedDay.year);
+            },
+            eventLoader: (day) => _holidays[day] ?? [],
+            calendarStyle: CalendarStyle(
+              markerDecoration: BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+              ),
+              todayDecoration: BoxDecoration(
+                color: Colors.amber,
+                shape: BoxShape.circle,
+              ),
+              selectedDecoration: BoxDecoration(
+                color: Colors.blue,
+                shape: BoxShape.circle,
+              ),
+            ),
+            headerStyle: HeaderStyle(
+              formatButtonVisible: true,
+              titleCentered: true,
+            ),
+          ),
+          const SizedBox(height: 16),
+          _isLoading ? const CircularProgressIndicator() : _buildHolidayList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHolidayList() {
+    if (_selectedDay == null || _holidays[_selectedDay] == null) {
+      return const Padding(
+        padding: EdgeInsets.all(16.0),
+        child: Text('Nenhum feriado nesta data'),
+      );
+    }
+
+    return Expanded(
+      child: ListView.builder(
+        itemCount: _holidays[_selectedDay]!.length,
+        itemBuilder: (context, index) {
+          final holiday = _holidays[_selectedDay]![index];
+          return Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: ListTile(
+              leading: const Icon(Icons.celebration, color: Colors.red),
+              title: Text(holiday.name),
+              subtitle: Text('Tipo: ${holiday.type}'),
+            ),
+          );
+        },
+      ),
     );
   }
 }
